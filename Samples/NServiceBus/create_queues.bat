@@ -1,0 +1,1 @@
+.\run_task.bat local CreateQueues

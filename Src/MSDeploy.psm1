@@ -9,6 +9,7 @@ function Sync-Provider {
 		$setParamFile,
 		$skip,
 		$computer,
+		$credential,
 		[switch] $useTempAgent
 	)
 
@@ -22,6 +23,12 @@ function Sync-Provider {
 	
 	if($computer -ne $null) {
 		$destBaseOptions.ComputerName = $computer
+	}
+	
+	if($credential -ne $null) {
+		$destBaseOptions.UserName = $credential.UserName
+		$password = $credential.GetNetworkCredential().Password
+		$destBaseOptions.Password = $password
 	}
 	
 	if($useTempAgent) {

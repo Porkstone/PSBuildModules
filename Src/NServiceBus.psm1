@@ -13,32 +13,36 @@ function Release-Handler {
 		$computerName,
 		$credential
 	)
-
+	write-host "Releasing handlers"
 	$session = $null
 	
 	if($computerName -ne $null) {
 		$session = New-PSSession -computerName $computerName -credential $credential
 	}
 	
+	write-host "Getting sync info"
 	$syncInfo = GetHandlerSyncInfo -sourcePath $projectPath -destinationPath $destinationPath -include $include -exclude $exclude -session $session
 	
 	write-host "Handler sync info:"
 	
-	$syncInfo.Values | format-list -property Name, Action, Path, DestinationPath
+	$syncInfo.Values | format-list -property Name, Action, Path, DestinationPath | Out-String | foreach { write-host $_ }
 	
+	write-host "Stopping Services"
 	StopServices -syncInfo $syncInfo -session $session
 
+	write-host "Uninstalling Services"
 	UninstallServices -syncInfo $syncInfo -session $session
 	
 	write-host "Waiting for 30 seconds to ensure that all services have stopped"
 	start-sleep -seconds 30
 
+	write-host "Syncing Handlers"
 	SyncHandlerFolders -syncInfo $syncInfo -session $session
     
-	InstallQueues -syncInfo $syncInfo -profile $profile -session $session
-
+	write-host "Installing Handlers"
 	InstallServices -syncInfo $syncInfo -session $session
 	
+	write-host "Starting Handlers"
 	StartServices -syncInfo $syncInfo -session $session
 }
 
@@ -197,6 +201,7 @@ function Package-Handler {
 		[ValidateNotNullOrEmpty()]
 		$projectPath,
 		$destination,
+		$licenseFilePath,
 		[string] $configuration,
 		[string] $include = "\.Handlers$",
 		[string] $exclude,
@@ -210,7 +215,7 @@ function Package-Handler {
 		write-host "No handlers found"
 	}
 	else {
-		PackageHandler -paths $paths -destination $destination -configuration $configuration
+		PackageHandler -paths $paths -destination $destination -licenseFilePath $licenseFilePath -configuration $configuration
 	}
 }
 
@@ -297,6 +302,7 @@ function PackageHandler {
 		[ValidateNotNull()]
 		$paths,
 		$destination,
+		$licenseFilePath,
 		[string] $configuration
 	)
 	
@@ -321,6 +327,14 @@ function PackageHandler {
 			write-host "  Destination: $destinationPath"
 
 			Sync-Provider -sourcePath $sourcePath -sourceProvider "dirPath" -destinationPath $destinationPath -destinationProvider "dirpath"
+			
+			if($licenseFilePath -ne $null) {
+				if(!(test-path $licenseFilePath -PathType Leaf)) { write-error "Could not find license file ( $licenseFilePath )." }
+			
+				$destLicenseFile = join-path $destinationPath "License\License.xml"
+				new-item $destLicenseFile -type File -force | out-null
+				copy-item $licenseFilePath -destination $destLicenseFile -force
+			}
 		}
 	}
 }
@@ -474,21 +488,21 @@ function InstallServices {
 		
 		Invoke-CommandLocalOrRemotely -session $session -argumentList @($inputQueueName, $path, $profile) -scriptblock {
 			Param($name, $path, $profile)
-			
-			$pathName = "$path -service $profile /servicename:$name"
-			
+
 			$service = get-wmiobject win32_service -filter "name='$name'"
-						
-			if($service -eq $null) 
-			{
-				new-service -name $name -displayName $name -Description $name -binaryPathName $pathName | out-null
-			}
-			elseif($service.PathName -ne $pathName) 
+
+			if($service -ne $null) 
 			{
 				write-host ("Service found. Reinstalling {0}" -f $name)
 				$service.Delete() | out-null
-				
-				new-service -name $name -displayName $name -Description $name -binaryPathName $pathName | out-null
+			}
+
+			$args = @($profile, "/install", "/startManually", "/servicename:$name", "/displayName:$name")
+
+			& $path $args | Out-Null
+
+			if($LastExitCode -ne 0) {
+				write-error "NServiceBus endpoint $name failed to install"
 			}
 		}
 	}
